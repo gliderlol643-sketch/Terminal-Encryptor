@@ -227,13 +227,13 @@ init_secure_environment() {
 encrypt_data() {
     local plaintext="$1"
     local context="$2"
-    
+
     local iv=$(openssl rand -hex $IV_LENGTH)
     local encrypted=$(echo -n "$plaintext" | openssl enc -aes-256-gcm \
         -K "$(echo -n "$MASTER_KEY" | sha256sum | cut -d' ' -f1)" \
         -iv "$iv" \
         -a -A 2>/dev/null)
-    
+
     if [ $? -eq 0 ]; then
         echo "${iv}:${encrypted}:${context}"
         log_audit "ENCRYPT_SUCCESS" "Data encrypted for context: $context"
@@ -245,16 +245,16 @@ encrypt_data() {
 
 decrypt_data() {
     local encrypted_data="$1"
-    
+
     local iv=$(echo "$encrypted_data" | cut -d':' -f1)
     local data=$(echo "$encrypted_data" | cut -d':' -f2)
     local context=$(echo "$encrypted_data" | cut -d':' -f3)
-    
+
     local decrypted=$(echo -n "$data" | openssl enc -d -aes-256-gcm \
         -K "$(echo -n "$MASTER_KEY" | sha256sum | cut -d' ' -f1)" \
         -iv "$iv" \
         -a -A 2>/dev/null)
-    
+
     if [ $? -eq 0 ]; then
         log_audit "DECRYPT_SUCCESS" "Data decrypted for context: $context"
         echo "$decrypted"
@@ -270,9 +270,9 @@ log_audit() {
     local timestamp=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
     local user="${current_user:-"SYSTEM"}"
     local session_id="${SESSION_ID:-"NO_SESSION"}"
-    
+
     local log_entry="$timestamp | $event_type | $user | $session_id | $message | THEME:$COLOR_THEME"
-    
+
     echo "$log_entry" >> "$LOGS_DIR/audit_$SESSION_ID.log"
     echo "[AUDIT] $log_entry" >> "$LOGS_DIR/system.log"
 }
@@ -287,7 +287,7 @@ show_welcome_menu() {
     echo -e "${PURPLE}║             TERMINAL ENCRYPTOR V1.1.2                   ║${NC}"
     echo -e "${PURPLE}║         Защищенная система шифрования и сетей          ║${NC}"
     echo -e "${PURPLE}╚══════════════════════════════════════════════════════════╝${NC}\n"
-    
+
     echo -e "${CYAN}╔══════════════════════════════════════════════════════════╗${NC}"
     echo -e "${CYAN}║                      ПОДДЕРЖКА                           ║${NC}"
     echo -e "${CYAN}║                                                          ║${NC}"
@@ -296,9 +296,9 @@ show_welcome_menu() {
     echo -e "${CYAN}║  ${WHITE}GitHub репозиторий: ${YELLOW}$GITHUB_REPO${NC}                        ${CYAN}║${NC}"
     echo -e "${CYAN}║  ${WHITE}Текущая цветовая тема: ${YELLOW}$COLOR_THEME${NC}                     ${CYAN}║${NC}"
     echo -e "${CYAN}╚══════════════════════════════════════════════════════════╝${NC}\n"
-    
+
     echo -e "${GREEN}Добро пожаловать в систему Terminal Encryptor!${NC}\n"
-    
+
     if [ -z "$current_user" ]; then
         echo -e "${YELLOW}1. Вход в систему${NC}"
         echo -e "${YELLOW}2. Регистрация${NC}"
@@ -308,7 +308,7 @@ show_welcome_menu() {
         echo -e "${GREEN}Вы вошли как: ${WHITE}$current_user${NC}"
         echo -e "${CYAN}ID сессии: ${WHITE}$SESSION_ID${NC}"
         echo -e "${BLUE}Тема интерфейса: ${WHITE}$COLOR_THEME${NC}\n"
-        
+
         echo -e "${YELLOW}1. Шифрование${NC}"
         echo -e "${YELLOW}2. Управление каналами${NC}"
         echo -e "${YELLOW}3. Управление сетями${NC}"
@@ -318,7 +318,7 @@ show_welcome_menu() {
         echo -e "${YELLOW}7. Смена цветовой темы${NC}"
         echo -e "${YELLOW}8. Выход из аккаунта${NC}"
     fi
-    
+
     echo -e "\n${WHITE}══════════════════════════════════════════════════════════${NC}"
 }
 
@@ -331,55 +331,82 @@ register_user() {
     echo -e "${PURPLE}╔════════════════════════════════════════╗${NC}"
     echo -e "${PURPLE}║           РЕГИСТРАЦИЯ                 ║${NC}"
     echo -e "${PURPLE}╚════════════════════════════════════════╝${NC}\n"
-    
+
     read -p "Введите имя пользователя: " username
     read -sp "Введите пароль: " password
     echo
     read -sp "Повторите пароль: " password2
     echo
-    
+
     if [ "$password" != "$password2" ]; then
         echo -e "${RED}Пароли не совпадают!${NC}"
         sleep 2
-        return
+        return 1
     fi
-    
+
     if [ ${#password} -lt 6 ]; then
         echo -e "${RED}Пароль должен содержать минимум 6 символов!${NC}"
         sleep 2
-        return
+        return 1
     fi
-    
+
     echo -e "${CYAN}Выберите язык:${NC}"
     echo -e "1. Русский"
     echo -e "2. Английский"
     read -p "Ваш выбор (1-2): " lang_choice
-    
+
     case $lang_choice in
         1) language="ru" ;;
         2) language="en" ;;
         *) language="ru" ;;
     esac
-    
+
+    # Создаём каталоги если их нет
+    mkdir -p "$DATA_DIR"
+    touch "$DATA_DIR/users.db.enc"
+    chmod 600 "$DATA_DIR/users.db.enc" 2>/dev/null || true
+
+    # Проверка на дубликат имени пользователя
+    if [ -f "$DATA_DIR/users.db.enc" ]; then
+        while IFS= read -r line; do
+            # line формат: user_id:encrypted_blob
+            existing_enc="${line#*:}"
+            if [ -n "$existing_enc" ]; then
+                existing_data="$(decrypt_data "$existing_enc")"
+                if [ -n "$existing_data" ]; then
+                    existing_name=$(echo "$existing_data" | grep -o 'USERNAME=[^|]*' | cut -d'=' -f2)
+                    if [ "$existing_name" = "$username" ]; then
+                        echo -e "${RED}Пользователь с таким именем уже существует!${NC}"
+                        log_audit "REGISTER_FAIL" "Attempt to register duplicate username: $username"
+                        sleep 2
+                        return 1
+                    fi
+                fi
+            fi
+        done < "$DATA_DIR/users.db.enc"
+    fi
+
     # Генерация ID пользователя
     user_id="USR_$(date +%s%N | sha256sum | head -c 8)"
-    
+
     # Хэширование пароля
     password_hash=$(echo -n "$password" | sha256sum | cut -d' ' -f1)
-    
+
     # Шифрование данных пользователя
     user_data="USERNAME=$username|PASSWORD_HASH=$password_hash|LANGUAGE=$language|REG_DATE=$(date +%Y-%m-%d)"
     encrypted_user=$(encrypt_data "$user_data" "USER_$user_id")
-    
+
     # Сохранение пользователя
     echo "$user_id:$encrypted_user" >> "$DATA_DIR/users.db.enc"
-    
+    chmod 600 "$DATA_DIR/users.db.enc" 2>/dev/null || true
+
     echo -e "\n${GREEN}Регистрация успешна!${NC}"
     echo -e "${BLUE}Ваш ID: ${WHITE}$user_id${NC}"
     echo -e "${YELLOW}Запомните ваш ID для входа!${NC}"
-    
+
     log_audit "USER_REGISTER" "New user registered: $username ($user_id)"
     sleep 3
+    return 0
 }
 
 login_user() {
@@ -387,62 +414,63 @@ login_user() {
     echo -e "${PURPLE}╔════════════════════════════════════════╗${NC}"
     echo -e "${PURPLE}║               ВХОД                    ║${NC}"
     echo -e "${PURPLE}╚════════════════════════════════════════╝${NC}\n"
-    
+
     read -p "Введите ваш ID пользователя: " user_id
     read -sp "Введите пароль: " password
     echo
-    
+
     if [ ! -f "$DATA_DIR/users.db.enc" ]; then
         echo -e "${RED}База данных пользователей не найдена!${NC}"
         sleep 2
-        return
+        return 1
     fi
-    
-    local found=false
-    
+
     while IFS= read -r line; do
-        if [[ "$line" == "$user_id:"* ]]; then
-            found=true
-            local encrypted_data="${line#*:}"
-            local user_data=$(decrypt_data "$encrypted_data")
-            
-            if [ -n "$user_data" ]; then
-                # Извлекаем данные
-                local stored_username=$(echo "$user_data" | grep -o 'USERNAME=[^|]*' | cut -d'=' -f2)
-                local stored_hash=$(echo "$user_data" | grep -o 'PASSWORD_HASH=[^|]*' | cut -d'=' -f2)
-                local user_lang=$(echo "$user_data" | grep -o 'LANGUAGE=[^|]*' | cut -d'=' -f2)
-                
-                # Проверяем пароль
-                local input_hash=$(echo -n "$password" | sha256sum | cut -d' ' -f1)
-                
-                if [ "$input_hash" = "$stored_hash" ]; then
-                    current_user="$stored_username"
-                    current_user_id="$user_id"
-                    current_language="$user_lang"
-                    
-                    echo -e "\n${GREEN}Вход выполнен успешно!${NC}"
-                    echo -e "${BLUE}Добро пожаловать, ${WHITE}$current_user${NC}!"
-                    
-                    # Генерация токена сессии
-                    session_token="SESS_$(date +%s%N | sha256sum | head -c 16)"
-                    
-                    log_audit "USER_LOGIN" "User logged in: $current_user ($current_user_id)"
-                    sleep 2
-                    return
-                else
-                    echo -e "${RED}Неверный пароль!${NC}"
-                    log_audit "LOGIN_FAIL" "Failed login attempt for ID: $user_id"
-                    sleep 2
-                    return
-                fi
+        local stored_id="${line%%:*}"
+
+        if [ "$stored_id" = "$user_id" ]; then
+            local encrypted="${line#*:}"
+            local user_data="$(decrypt_data "$encrypted")"
+
+            if [ -z "$user_data" ]; then
+                echo -e "${RED}Ошибка чтения данных пользователя!${NC}"
+                sleep 2
+                return 1
+            fi
+
+            local username=$(echo "$user_data" | grep -o 'USERNAME=[^|]*' | cut -d'=' -f2)
+            local stored_hash=$(echo "$user_data" | grep -o 'PASSWORD_HASH=[^|]*' | cut -d'=' -f2)
+            local lang=$(echo "$user_data" | grep -o 'LANGUAGE=[^|]*' | cut -d'=' -f2)
+
+            local input_hash=$(echo -n "$password" | sha256sum | cut -d' ' -f1)
+
+            if [ "$input_hash" = "$stored_hash" ]; then
+                # УСТАНАВЛИВАЕМ ПЕРЕМЕННЫЕ
+                current_user="$username"
+                current_user_id="$user_id"
+                current_language="$lang"
+
+                # Генерация токена
+                session_token="SESS_$(date +%s%N | sha256sum | head -c 16)"
+
+                echo -e "\n${GREEN}Вход выполнен успешно!${NC}"
+                echo -e "${BLUE}Добро пожаловать, ${WHITE}$current_user${NC}!"
+                log_audit "USER_LOGIN" "Login: $current_user ($current_user_id)"
+
+                sleep 2
+                return 0
+            else
+                echo -e "${RED}Неверный пароль!${NC}"
+                log_audit "LOGIN_FAIL" "Wrong password for $user_id"
+                sleep 2
+                return 1
             fi
         fi
     done < "$DATA_DIR/users.db.enc"
-    
-    if [ "$found" = false ]; then
-        echo -e "${RED}Пользователь с таким ID не найден!${NC}"
-        sleep 2
-    fi
+
+    echo -e "${RED}Пользователь с таким ID не найден!${NC}"
+    sleep 2
+    return 1
 }
 
 # ============================================
@@ -455,10 +483,10 @@ encryption_menu() {
         echo -e "${PURPLE}╔════════════════════════════════════════╗${NC}"
         echo -e "${PURPLE}║           МЕНЮ ШИФРОВАНИЯ             ║${NC}"
         echo -e "${PURPLE}╚════════════════════════════════════════╝${NC}\n"
-        
+
         echo -e "${CYAN}Текущий пользователь: ${WHITE}$current_user${NC}"
         echo -e "${YELLOW}ID сессии: ${WHITE}$SESSION_ID${NC}\n"
-        
+
         echo -e "${GREEN}1. Зашифровать текст${NC}"
         echo -e "${GREEN}2. Расшифровать текст${NC}"
         echo -e "${GREEN}3. Зашифровать символы/цифры${NC}"
@@ -466,10 +494,10 @@ encryption_menu() {
         echo -e "${GREEN}5. Зашифровать IP${NC}"
         echo -e "${GREEN}6. Расшифровать IP${NC}"
         echo -e "${GREEN}7. Выйти в главное меню${NC}"
-        
+
         echo -e "\n${WHITE}════════════════════════════════════════${NC}"
         read -p "Выберите действие (1-7): " choice
-        
+
         case $choice in
             1)
                 echo -e "\n${CYAN}Введите текст для шифрования:${NC}"
@@ -513,7 +541,7 @@ encryption_menu() {
             7) return ;;
             *) echo -e "${RED}Неверный выбор!${NC}"; sleep 1 ;;
         esac
-        
+
         echo -e "\n${YELLOW}Нажмите Enter для продолжения...${NC}"
         read
     done
@@ -524,20 +552,19 @@ account_settings_menu() {
         clear
         echo -e "${PURPLE}╔════════════════════════════════════════╗${NC}"
         echo -e "${PURPLE}║       НАСТРОЙКИ АККАУНТА             ║${NC}"
-        echo -e "${PURPLE}╚════════════════════════════════════════╝${NC}\n"
-        
+        echo -e `${PURPLE}╚════════════════════════════════════════╝${NC}\n`  >/dev/null 2>&1
         echo -e "${CYAN}Текущий пользователь: ${WHITE}$current_user${NC}"
         echo -e "${BLUE}ID пользователя: ${WHITE}$current_user_id${NC}"
         echo -e "${YELLOW}Язык: ${WHITE}$current_language${NC}\n"
-        
+
         echo -e "${GREEN}1. Изменить имя пользователя${NC}"
         echo -e "${GREEN}2. Изменить пароль${NC}"
         echo -e "${GREEN}3. Показать ID${NC}"
         echo -e "${GREEN}4. Выйти${NC}"
-        
+
         echo -e "\n${WHITE}════════════════════════════════════════${NC}"
         read -p "Выберите действие (1-4): " choice
-        
+
         case $choice in
             1)
                 echo -e "\n${CYAN}Текущее имя: ${WHITE}$current_user${NC}"
@@ -557,7 +584,7 @@ account_settings_menu() {
                 echo
                 read -sp "Повторите новый пароль: " new_pass2
                 echo
-                
+
                 if [ "$new_pass1" = "$new_pass2" ]; then
                     if [ ${#new_pass1} -ge 6 ]; then
                         echo -e "${GREEN}Пароль успешно изменен!${NC}"
@@ -577,7 +604,7 @@ account_settings_menu() {
             4) return ;;
             *) echo -e "${RED}Неверный выбор!${NC}"; sleep 1 ;;
         esac
-        
+
         echo -e "\n${YELLOW}Нажмите Enter для продолжения...${NC}"
         read
     done
@@ -590,20 +617,20 @@ account_settings_menu() {
 main() {
     # Инициализация
     init_secure_environment
-    
+
     # Главный цикл
     while true; do
         show_welcome_menu
-        
+
         if [ -z "$current_user" ]; then
             # Меню для неавторизованных пользователей
             read -p "Выберите действие (1-4): " choice
-            
+
             case $choice in
                 1) login_user ;;
                 2) register_user ;;
                 3) change_color_theme_menu ;;
-                4) 
+                4)
                     echo -e "\n${GREEN}Спасибо за использование Terminal Encryptor!${NC}"
                     echo -e "${YELLOW}Не забудьте подписаться на канал: $NEWS_CHANNEL${NC}"
                     log_audit "SYSTEM_EXIT" "User exited the system"
@@ -614,28 +641,28 @@ main() {
         else
             # Меню для авторизованных пользователей
             read -p "Выберите действие (1-8): " choice
-            
+
             case $choice in
                 1) encryption_menu ;;
-                2) 
+                2)
                     echo -e "\n${YELLOW}Модуль управления каналами в разработке...${NC}"
                     sleep 2
                     ;;
-                3) 
+                3)
                     echo -e "\n${YELLOW}Модуль управления сетями в разработке...${NC}"
                     sleep 2
                     ;;
-                4) 
+                4)
                     echo -e "\n${YELLOW}Модуль настроек в разработке...${NC}"
                     sleep 2
                     ;;
                 5) account_settings_menu ;;
-                6) 
+                6)
                     echo -e "\n${YELLOW}Модуль друзей в разработке...${NC}"
                     sleep 2
                     ;;
                 7) change_color_theme_menu ;;
-                8) 
+                8)
                     echo -e "\n${GREEN}Выход из аккаунта...${NC}"
                     log_audit "USER_LOGOUT" "User logged out: $current_user"
                     current_user=""
@@ -656,9 +683,9 @@ main() {
 # Проверка зависимостей
 check_dependencies() {
     local missing=0
-    
+
     echo -e "${CYAN}Проверка зависимостей...${NC}"
-    
+
     # Проверка наличия openssl
     if ! command -v openssl &> /dev/null; then
         echo -e "${RED}✗ OpenSSL не установлен${NC}"
@@ -667,7 +694,7 @@ check_dependencies() {
     else
         echo -e "${GREEN}✓ OpenSSL установлен${NC}"
     fi
-    
+
     # Проверка наличия sha256sum
     if ! command -v sha256sum &> /dev/null; then
         echo -e "${RED}✗ sha256sum не найден${NC}"
@@ -676,12 +703,12 @@ check_dependencies() {
     else
         echo -e "${GREEN}✓ sha256sum установлен${NC}"
     fi
-    
+
     if [ $missing -eq 1 ]; then
         echo -e "\n${RED}Установите недостающие зависимости и перезапустите скрипт${NC}"
         exit 1
     fi
-    
+
     echo -e "\n${GREEN}Все зависимости удовлетворены!${NC}"
     sleep 1
 }
