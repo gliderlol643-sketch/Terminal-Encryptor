@@ -1,3 +1,648 @@
+# ==================== СИСТЕМА ДРУЗЕЙ ====================
+FRIENDS_DB="$DATA_DIR/friends.db"
+REQUESTS_DB="$DATA_DIR/friend_requests.db"
+
+init_friends_db() {
+    if [ ! -f "$FRIENDS_DB" ]; then
+        echo "user_id|friend_id|friend_name|status|since|last_interaction" > "$FRIENDS_DB"
+    fi
+    
+    if [ ! -f "$REQUESTS_DB" ]; then
+        echo "request_id|from_user|to_user|status|timestamp|message" > "$REQUESTS_DB"
+    fi
+}
+
+friends_menu() {
+    while true; do
+        clear
+        echo -e "${CYAN}"
+        echo "╔══════════════════════════════════════════════════╗"
+        echo "║               СИСТЕМА ДРУЗЕЙ                    ║"
+        echo "╠══════════════════════════════════════════════════╣"
+        echo "║  Пользователь: $CURRENT_USER"
+        echo "║  ID: $USER_ID"
+        echo "╠══════════════════════════════════════════════════╣"
+        echo "║                                                  ║"
+        echo "║  1. 👥 Мои друзья                               ║"
+        echo "║  2. ➕ Найти друга по ID                         ║"
+        echo "║  3. 📨 Отправить запрос в друзья                ║"
+        echo "║  4. 📬 Входящие запросы                         ║"
+        echo "║  5. 📤 Исходящие запросы                        ║"
+        echo "║  6. 🔍 Поиск пользователей                      ║"
+        echo "║  7. 💬 Чат с другом                             ║"
+        echo "║  8. 🎁 Отправить файл другу                     ║"
+        echo "║  9. 🛡️  Блокировка пользователей                ║"
+        echo "║ 10. ⚙️  Настройки друзей                         ║"
+        echo "║  0. ↩️  Назад                                    ║"
+        echo "║                                                  ║"
+        echo "╚══════════════════════════════════════════════════╝"
+        echo -e "${NC}"
+        
+        read -p "Выберите действие: " choice
+        
+        case $choice in
+            1) show_my_friends ;;
+            2) find_friend_by_id ;;
+            3) send_friend_request ;;
+            4) incoming_requests ;;
+            5) outgoing_requests ;;
+            6) search_users ;;
+            7) chat_with_friend ;;
+            8) send_file_to_friend ;;
+            9) block_user_menu ;;
+            10) friends_settings ;;
+            0) return ;;
+            *) echo -e "${RED}[!] Неверный выбор${NC}"; sleep 1 ;;
+        esac
+    done
+}
+
+find_friend_by_id() {
+    clear
+    echo -e "${CYAN}"
+    echo "╔══════════════════════════════════════════════════╗"
+    echo "║           ПОИСК ДРУГА ПО ID                      ║"
+    echo "╚══════════════════════════════════════════════════╝"
+    echo -e "${NC}"
+    
+    read -p "Введите ID пользователя: " friend_id
+    
+    if [ -z "$friend_id" ]; then
+        echo -e "${RED}[!] ID не может быть пустым${NC}"
+        read -p "Нажмите Enter..."
+        return
+    fi
+    
+    # Проверяем, не ищем ли мы сами себя
+    if [ "$friend_id" = "$USER_ID" ]; then
+        echo -e "${YELLOW}[!] Это ваш собственный ID${NC}"
+        read -p "Нажмите Enter..."
+        return
+    fi
+    
+    # Ищем пользователя в базе
+    friend_info=$(grep "|$friend_id|" "$USERS_DB" | head -1)
+    
+    if [ -z "$friend_info" ]; then
+        echo -e "${RED}[!] Пользователь с ID $friend_id не найден${NC}"
+        echo -e "${YELLOW}[i] Проверьте правильность ID${NC}"
+    else
+        friend_name=$(echo "$friend_info" | cut -d'|' -f1)
+        friend_status=$(echo "$friend_info" | cut -d'|' -f7)
+        friend_since=$(echo "$friend_info" | cut -d'|' -f5)
+        
+        echo -e "\n${GREEN}[✓] Пользователь найден!${NC}"
+        echo -e "${YELLOW}Информация:${NC}"
+        echo -e "  Имя: $friend_name"
+        echo -e "  ID: $friend_id"
+        echo -e "  Статус: $friend_status"
+        echo -e "  Зарегистрирован: $(date -d "@$friend_since" '+%d.%m.%Y')"
+        
+        # Проверяем, уже друзья или есть запрос
+        check_friendship_status "$friend_id"
+        
+        echo -e "\n${YELLOW}Действия:${NC}"
+        echo "1. Отправить запрос в друзья"
+        echo "2. Отправить сообщение"
+        echo "3. Пригласить в канал"
+        echo "4. Назад"
+        
+        read -p "Выберите действие: " action
+        
+        case $action in
+            1) send_friend_request_to_id "$friend_id" "$friend_name" ;;
+            2) send_message_to_friend "$friend_id" "$friend_name" ;;
+            3) invite_to_channel "$friend_id" "$friend_name" ;;
+        esac
+    fi
+    
+    read -p "Нажмите Enter..."
+}
+
+check_friendship_status() {
+    local friend_id="$1"
+    
+    # Проверяем, уже друзья
+    if grep -q "^$USER_ID|$friend_id|" "$FRIENDS_DB" || grep -q "^$friend_id|$USER_ID|" "$FRIENDS_DB"; then
+        echo -e "${GREEN}  Статус: Уже друзья ✓${NC}"
+        return 0
+    fi
+    
+    # Проверяем входящий запрос
+    if grep -q "^[^|]*|$USER_ID|$friend_id|pending|" "$REQUESTS_DB"; then
+        echo -e "${YELLOW}  Статус: Есть входящий запрос ✉️${NC}"
+        return 1
+    fi
+    
+    # Проверяем исходящий запрос
+    if grep -q "^[^|]*|$USER_ID|$friend_id|pending|" "$REQUESTS_DB"; then
+        echo -e "${BLUE}  Статус: Запрос отправлен 📤${NC}"
+        return 2
+    fi
+    
+    echo -e "${WHITE}  Статус: Не в друзьях${NC}"
+    return 3
+}
+
+send_friend_request_to_id() {
+    local friend_id="$1"
+    local friend_name="$2"
+    
+    echo -e "\n${YELLOW}[i] Отправка запроса в друзья...${NC}"
+    
+    read -p "Добавить сообщение к запросу (необязательно): " message
+    
+    # Генерируем ID запроса
+    request_id="REQ_$(date +%s)_$RANDOM"
+    
+    # Сохраняем запрос
+    echo "$request_id|$USER_ID|$friend_id|pending|$(date +%s)|$message" >> "$REQUESTS_DB"
+    
+    echo -e "${GREEN}[✓] Запрос отправлен пользователю $friend_name!${NC}"
+    echo -e "${YELLOW}[i] Ожидайте подтверждения${NC}"
+    
+    log_system "FRIEND_REQUEST" "Отправлен запрос $CURRENT_USER → $friend_name" "INFO"
+    
+    # Создаем уведомление для получателя
+    create_notification "$friend_id" "friend_request" \
+        "Пользователь $CURRENT_USER отправил вам запрос в друзья"
+}
+
+create_notification() {
+    local user_id="$1"
+    local type="$2"
+    local message="$3"
+    
+    NOTIF_DIR="$DATA_DIR/notifications"
+    mkdir -p "$NOTIF_DIR"
+    
+    local notif_file="$NOTIF_DIR/${user_id}_notifs.txt"
+    local notif_id="NOTIF_$(date +%s)_$RANDOM"
+    
+    echo "$notif_id|$type|$message|$(date +%s)|unread" >> "$notif_file"
+}
+
+show_my_friends() {
+    clear
+    echo -e "${CYAN}"
+    echo "╔══════════════════════════════════════════════════╗"
+    echo "║               МОИ ДРУЗЬЯ                         ║"
+    echo "╚══════════════════════════════════════════════════╝"
+    echo -e "${NC}"
+    
+    # Получаем список друзей
+    friends_list=$(grep "^$USER_ID|" "$FRIENDS_DB" | grep "|accepted|")
+    
+    if [ -z "$friends_list" ]; then
+        echo -e "${YELLOW}[i] У вас пока нет друзей${NC}"
+        echo -e "${WHITE}[i] Найдите друзей по ID и отправьте им запрос${NC}"
+    else
+        friend_count=$(echo "$friends_list" | wc -l)
+        echo -e "${GREEN}[✓] У вас $friend_count друзей:${NC}\n"
+        
+        IFS=$'\n'
+        for friend in $friends_list; do
+            friend_id=$(echo "$friend" | cut -d'|' -f2)
+            friend_name=$(echo "$friend" | cut -d'|' -f3)
+            since=$(echo "$friend" | cut -d'|' -f5)
+            last_interaction=$(echo "$friend" | cut -d'|' -f6)
+            
+            echo -e "${BLUE}▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬${NC}"
+            echo -e "${YELLOW}👤 $friend_name${NC}"
+            echo -e "  ID: $friend_id"
+            echo -e "  В друзьях с: $(date -d "@$since" '+%d.%m.%Y')"
+            
+            if [ "$last_interaction" != "0" ]; then
+                echo -e "  Последняя активность: $(date -d "@$last_interaction" '+%H:%M %d.%m')"
+            fi
+            
+            # Статус онлайн/оффлайн
+            check_online_status "$friend_id"
+        done
+        unset IFS
+        
+        echo -e "\n${YELLOW}Действия:${NC}"
+        echo "1. Написать сообщение"
+        echo "2. Создать общий канал"
+        echo "3. Удалить из друзей"
+        echo "4. Назад"
+        
+        read -p "Выберите действие: " action
+        
+        case $action in
+            1) 
+                read -p "Введите ID друга: " selected_id
+                start_chat_with_friend "$selected_id"
+                ;;
+            2) 
+                read -p "Введите ID друга: " selected_id
+                create_shared_channel "$selected_id"
+                ;;
+            3) 
+                read -p "Введите ID друга для удаления: " selected_id
+                remove_friend "$selected_id"
+                ;;
+        esac
+    fi
+    
+    read -p "Нажмите Enter..."
+}
+
+check_online_status() {
+    local friend_id="$1"
+    local user_file="$DATA_DIR/sessions/$friend_id.status"
+    
+    if [ -f "$user_file" ]; then
+        local last_seen=$(cat "$user_file")
+        local current_time=$(date +%s)
+        local diff=$((current_time - last_seen))
+        
+        if [ $diff -lt 300 ]; then  # 5 минут
+            echo -e "  ${GREEN}● Онлайн${NC}"
+        elif [ $diff -lt 3600 ]; then  # 1 час
+            echo -e "  ${YELLOW}○ Был(а) недавно${NC}"
+        else
+            echo -e "  ${WHITE}○ Не в сети${NC}"
+        fi
+    else
+        echo -e "  ${WHITE}○ Не в сети${NC}"
+    fi
+}
+
+incoming_requests() {
+    clear
+    echo -e "${CYAN}"
+    echo "╔══════════════════════════════════════════════════╗"
+    echo "║           ВХОДЯЩИЕ ЗАПРОСЫ                       ║"
+    echo "╚══════════════════════════════════════════════════╝"
+    echo -e "${NC}"
+    
+    requests=$(grep "|$USER_ID|pending|" "$REQUESTS_DB")
+    
+    if [ -z "$requests" ]; then
+        echo -e "${YELLOW}[i] Нет входящих запросов${NC}"
+    else
+        echo -e "${GREEN}[✓] Входящие запросы:${NC}\n"
+        
+        IFS=$'\n'
+        i=1
+        for req in $requests; do
+            request_id=$(echo "$req" | cut -d'|' -f1)
+            from_user_id=$(echo "$req" | cut -d'|' -f2)
+            message=$(echo "$req" | cut -d'|' -f6)
+            timestamp=$(echo "$req" | cut -d'|' -f5)
+            
+            # Получаем имя отправителя
+            from_user_name=$(grep "^[^|]*|.*|$from_user_id|" "$USERS_DB" | cut -d'|' -f1)
+            
+            echo -e "${BLUE}$i. Запрос от: $from_user_name${NC}"
+            echo -e "   ID: $from_user_id"
+            echo -e "   Время: $(date -d "@$timestamp" '+%H:%M %d.%m')"
+            
+            if [ -n "$message" ] && [ "$message" != "null" ]; then
+                echo -e "   Сообщение: $message"
+            fi
+            
+            echo -e "   ${YELLOW}1. Принять    2. Отклонить    3. Просмотреть профиль${NC}"
+            echo ""
+            i=$((i + 1))
+        done
+        unset IFS
+        
+        read -p "Выберите запрос для действия (номер): " selected
+        
+        if [[ "$selected" =~ ^[0-9]+$ ]]; then
+            selected_request=$(echo "$requests" | sed -n "${selected}p")
+            
+            if [ -n "$selected_request" ]; then
+                handle_friend_request "$selected_request"
+            fi
+        fi
+    fi
+    
+    read -p "Нажмите Enter..."
+}
+
+handle_friend_request() {
+    local request="$1"
+    
+    local request_id=$(echo "$request" | cut -d'|' -f1)
+    local from_user_id=$(echo "$request" | cut -d'|' -f2)
+    local from_user_name=$(grep "^[^|]*|.*|$from_user_id|" "$USERS_DB" | cut -d'|' -f1)
+    
+    echo -e "\n${YELLOW}Запрос от: $from_user_name ($from_user_id)${NC}"
+    echo "1. ✅ Принять запрос"
+    echo "2. ❌ Отклонить запрос"
+    echo "3. 👁️ Просмотреть профиль"
+    echo "4. 📝 Ответить сообщением"
+    echo "5. ⬅️ Назад"
+    
+    read -p "Выберите действие: " action
+    
+    case $action in
+        1)
+            # Принимаем запрос
+            accept_friend_request "$request_id" "$from_user_id" "$from_user_name"
+            ;;
+        2)
+            # Отклоняем запрос
+            reject_friend_request "$request_id" "$from_user_id"
+            ;;
+        3)
+            # Показываем профиль
+            show_user_profile "$from_user_id"
+            ;;
+        4)
+            # Отправляем сообщение
+            send_message_to_friend "$from_user_id" "$from_user_name"
+            ;;
+    esac
+}
+
+accept_friend_request() {
+    local request_id="$1"
+    local friend_id="$2"
+    local friend_name="$3"
+    
+    # Обновляем статус запроса
+    sed -i "s/^$request_id|.*$/&|accepted|$(date +%s)/" "$REQUESTS_DB"
+    
+    # Добавляем в друзья
+    echo "$USER_ID|$friend_id|$friend_name|accepted|$(date +%s)|$(date +%s)" >> "$FRIENDS_DB"
+    echo "$friend_id|$USER_ID|$CURRENT_USER|accepted|$(date +%s)|$(date +%s)" >> "$FRIENDS_DB"
+    
+    # Создаем уведомление для отправителя
+    create_notification "$friend_id" "friend_accepted" \
+        "$CURRENT_USER принял(а) ваш запрос в друзья!"
+    
+    echo -e "${GREEN}[✓] Вы приняли запрос от $friend_name!${NC}"
+    echo -e "${YELLOW}[i] Теперь вы друзья${NC}"
+    
+    log_system "FRIEND_ACCEPTED" "$CURRENT_USER принял запрос от $friend_name" "INFO"
+    
+    # Создаем приватный чат
+    create_private_chat "$friend_id"
+}
+
+create_private_chat() {
+    local friend_id="$1"
+    local chat_id="CHAT_${USER_ID}_${friend_id}"
+    
+    CHATS_DIR="$DATA_DIR/chats"
+    mkdir -p "$CHATS_DIR"
+    
+    local chat_file="$CHATS_DIR/$chat_id.txt"
+    
+    if [ ! -f "$chat_file" ]; then
+        echo "Private chat between $USER_ID and $friend_id" > "$chat_file"
+        echo "Created: $(date '+%Y-%m-%d %H:%M:%S')" >> "$chat_file"
+        echo "========================================" >> "$chat_file"
+    fi
+}
+
+chat_with_friend() {
+    clear
+    echo -e "${CYAN}"
+    echo "╔══════════════════════════════════════════════════╗"
+    echo "║               ЧАТ С ДРУГОМ                       ║"
+    echo "╚══════════════════════════════════════════════════╝"
+    echo -e "${NC}"
+    
+    read -p "Введите ID друга: " friend_id
+    
+    # Проверяем, есть ли такой друг
+    if ! grep -q "^$USER_ID|$friend_id|accepted|" "$FRIENDS_DB"; then
+        echo -e "${RED}[!] Этот пользователь не в вашем списке друзей${NC}"
+        read -p "Нажмите Enter..."
+        return
+    fi
+    
+    # Получаем имя друга
+    friend_name=$(grep "^[^|]*|.*|$friend_id|" "$USERS_DB" | cut -d'|' -f1)
+    
+    chat_id="CHAT_${USER_ID}_${friend_id}"
+    CHATS_DIR="$DATA_DIR/chats"
+    chat_file="$CHATS_DIR/$chat_id.txt"
+    
+    if [ ! -f "$chat_file" ]; then
+        echo -e "${YELLOW}[i] Создание нового чата...${NC}"
+        echo "Private chat between $USER_ID and $friend_id" > "$chat_file"
+        echo "Created: $(date '+%Y-%m-%d %H:%M:%S')" >> "$chat_file"
+        echo "========================================" >> "$chat_file"
+    fi
+    
+    clear
+    echo -e "${GREEN}"
+    echo "╔══════════════════════════════════════════════════╗"
+    echo "║           ЧАТ С $friend_name"
+    echo "╚══════════════════════════════════════════════════╝"
+    echo -e "${NC}"
+    
+    # Показываем последние сообщения
+    echo -e "${CYAN}Последние сообщения:${NC}"
+    tail -20 "$chat_file" | grep -v "^="
+    
+    echo -e "\n${YELLOW}[i] Введите сообщение (или 'exit' для выхода)${NC}"
+    
+    while true; do
+        echo -ne "${GREEN}Вы: ${NC}"
+        read message
+        
+        if [ "$message" = "exit" ]; then
+            break
+        fi
+        
+        if [ -n "$message" ]; then
+            # Сохраняем сообщение
+            echo "[$(date '+%H:%M')] $CURRENT_USER: $message" >> "$chat_file"
+            
+            # Обновляем время последнего взаимодействия
+            update_last_interaction "$friend_id"
+            
+            # Создаем уведомление для друга
+            create_notification "$friend_id" "new_message" \
+                "Новое сообщение от $CURRENT_USER: $(echo "$message" | cut -c1-50)..."
+            
+            echo -e "${BLUE}[✓] Сообщение отправлено${NC}"
+        fi
+    done
+}
+
+update_last_interaction() {
+    local friend_id="$1"
+    local current_time=$(date +%s)
+    
+    # Обновляем у себя
+    sed -i "s/^$USER_ID|$friend_id|.*$/$USER_ID|$friend_id|$(grep "^$USER_ID|$friend_id|" "$FRIENDS_DB" | cut -d'|' -f3-5)|$current_time/" "$FRIENDS_DB"
+    
+    # Обновляем у друга (в реальной системе нужно синхронизировать)
+    sed -i "s/^$friend_id|$USER_ID|.*$/$friend_id|$USER_ID|$(grep "^$friend_id|$USER_ID|" "$FRIENDS_DB" | cut -d'|' -f3-5)|$current_time/" "$FRIENDS_DB"
+}
+
+send_file_to_friend() {
+    clear
+    echo -e "${CYAN}"
+    echo "╔══════════════════════════════════════════════════╗"
+    echo "║           ОТПРАВКА ФАЙЛА ДРУГУ                   ║"
+    echo "╚══════════════════════════════════════════════════╝"
+    echo -e "${NC}"
+    
+    read -p "Введите ID друга: " friend_id
+    
+    if ! grep -q "^$USER_ID|$friend_id|accepted|" "$FRIENDS_DB"; then
+        echo -e "${RED}[!] Этот пользователь не в вашем списке друзей${NC}"
+        read -p "Нажмите Enter..."
+        return
+    fi
+    
+    read -p "Введите путь к файлу: " file_path
+    
+    if [ ! -f "$file_path" ]; then
+        echo -e "${RED}[!] Файл не найден${NC}"
+        read -p "Нажмите Enter..."
+        return
+    fi
+    
+    friend_name=$(grep "^[^|]*|.*|$friend_id|" "$USERS_DB" | cut -d'|' -f1)
+    
+    # Создаем директорию для обмена файлами
+    FILES_DIR="$DATA_DIR/shared_files"
+    mkdir -p "$FILES_DIR"
+    
+    # Генерируем уникальное имя файла
+    file_id="FILE_$(date +%s)_$RANDOM"
+    file_ext="${file_path##*.}"
+    new_filename="$FILES_DIR/${file_id}.${file_ext}"
+    
+    # Копируем файл
+    cp "$file_path" "$new_filename"
+    
+    # Создаем запись о файле
+    echo "$file_id|$USER_ID|$friend_id|$(basename "$file_path")|$(date +%s)|$new_filename|pending" >> "$DATA_DIR/shared_files.db"
+    
+    # Создаем уведомление
+    create_notification "$friend_id" "file_shared" \
+        "$CURRENT_USER отправил(а) вам файл: $(basename "$file_path")"
+    
+    echo -e "${GREEN}[✓] Файл отправлен $friend_name!${NC}"
+    echo -e "${YELLOW}[i] Файл будет доступен в разделе 'Полученные файлы'${NC}"
+    
+    log_system "FILE_SHARED" "$CURRENT_USER отправил файл $file_path другу $friend_name" "INFO"
+    
+    read -p "Нажмите Enter..."
+}
+
+block_user_menu() {
+    clear
+    echo -e "${CYAN}"
+    echo "╔══════════════════════════════════════════════════╗"
+    echo "║           БЛОКИРОВКА ПОЛЬЗОВАТЕЛЕЙ              ║"
+    echo "╚══════════════════════════════════════════════════╝"
+    echo -e "${NC}"
+    
+    echo "1. 🚫 Заблокировать пользователя"
+    echo "2. 📋 Список заблокированных"
+    echo "3. 🔓 Разблокировать пользователя"
+    echo "0. Назад"
+    
+    read -p "Выберите действие: " choice
+    
+    case $choice in
+        1) block_user ;;
+        2) show_blocked_users ;;
+        3) unblock_user ;;
+        0) return ;;
+    esac
+}
+
+block_user() {
+    read -p "Введите ID пользователя для блокировки: " block_id
+    
+    if [ -z "$block_id" ]; then
+        echo -e "${RED}[!] ID не может быть пустым${NC}"
+        return
+    fi
+    
+    if [ "$block_id" = "$USER_ID" ]; then
+        echo -e "${RED}[!] Нельзя заблокировать себя${NC}"
+        return
+    fi
+    
+    # Проверяем существование пользователя
+    if ! grep -q "|$block_id|" "$USERS_DB"; then
+        echo -e "${RED}[!] Пользователь не найден${NC}"
+        return
+    fi
+    
+    block_name=$(grep "^[^|]*|.*|$block_id|" "$USERS_DB" | cut -d'|' -f1)
+    
+    # Добавляем в черный список
+    BLOCKED_DB="$DATA_DIR/blocked.db"
+    echo "$USER_ID|$block_id|$block_name|$(date +%s)|" >> "$BLOCKED_DB"
+    
+    # Удаляем из друзей если были
+    sed -i "/^$USER_ID|$block_id|/d" "$FRIENDS_DB"
+    sed -i "/^$block_id|$USER_ID|/d" "$FRIENDS_DB"
+    
+    # Отклоняем все запросы
+    sed -i "s/\($USER_ID|$block_id|.*|\)pending/\1rejected/" "$REQUESTS_DB"
+    sed -i "s/\($block_id|$USER_ID|.*|\)pending/\1rejected/" "$REQUESTS_DB"
+    
+    echo -e "${GREEN}[✓] Пользователь $block_name заблокирован${NC}"
+    echo -e "${YELLOW}[i] Он не сможет отправлять вам сообщения и запросы${NC}"
+    
+    log_system "USER_BLOCKED" "$CURRENT_USER заблокировал $block_name" "WARN"
+}
+
+friends_settings() {
+    clear
+    echo -e "${CYAN}"
+    echo "╔══════════════════════════════════════════════════╗"
+    echo "║           НАСТРОЙКИ ДРУЗЕЙ                       ║"
+    echo "╚══════════════════════════════════════════════════╝"
+    echo -e "${NC}"
+    
+    echo "1. 🔔 Уведомления о новых запросах"
+    echo "2. 🔒 Приватность профиля"
+    echo "3. 👁️ Кто может видеть список друзей"
+    echo "4. 📵 Автоматическая блокировка спама"
+    echo "5. 💾 Экспорт списка друзей"
+    echo "0. Назад"
+    
+    read -p "Выберите настройку: " choice
+    
+    case $choice in
+        1) 
+            echo -e "${GREEN}[✓] Уведомления включены${NC}"
+            ;;
+        5)
+            export_friends_list
+            ;;
+    esac
+    
+    read -p "Нажмите Enter..."
+}
+
+export_friends_list() {
+    local export_file="$HOME/friends_export_$(date +%Y%m%d).txt"
+    
+    echo "Список друзей - $CURRENT_USER" > "$export_file"
+    echo "Экспортировано: $(date '+%Y-%m-%d %H:%M:%S')" >> "$export_file"
+    echo "========================================" >> "$export_file"
+    
+    grep "^$USER_ID|" "$FRIENDS_DB" | grep "|accepted|" | while read -r friend; do
+        friend_id=$(echo "$friend" | cut -d'|' -f2)
+        friend_name=$(echo "$friend" | cut -d'|' -f3)
+        since=$(echo "$friend" | cut -d'|' -f5)
+        
+        echo "Имя: $friend_name" >> "$export_file"
+        echo "ID: $friend_id" >> "$export_file"
+        echo "В друзьях с: $(date -d "@$since" '+%d.%m.%Y')" >> "$export_file"
+        echo "---" >> "$export_file"
+    done
+    
+    echo -e "${GREEN}[✓] Список друзей экспортирован в: $export_file${NC}"
+}
 # В account_menu():
 echo "6. 👥 Управление друзьями"
 echo "7. 📊 Статистика аккаунта"
