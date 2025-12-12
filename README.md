@@ -4,5 +4,4 @@ My own first terminal to talk with friends on secure servers that you make yours
 
 🎯 **download fast through:**
 
-```bash
-bash <(curl -s https://bit.ly/tencrypt-launcher)
+the link isn't available yet. sorry
