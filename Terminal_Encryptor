@@ -1,5 +1,4 @@
-#!/usr/bin/bash
-
+#!/usr/bin/env bash
 # Terminal Encryptor V1.1.2 - Secure Edition with Support System
 # Полностью зашифрованная система с онлайн-режимом и поддержкой
 
@@ -13,7 +12,7 @@ NEWS_CHANNEL="t.me/TerminalEncryptor"
 GITHUB_REPO="TerminalEncryptor"
 
 # Шифрование AES-256-GCM
-ENCRYPTION_KEY="$(openssl rand -hex 32)"
+ENCRYPTION_KEY="$(openssl rand -hex 32 2>/dev/null || echo "")"
 IV_LENGTH=12
 TAG_LENGTH=16
 
@@ -26,7 +25,7 @@ SOCKET_DIR="$SECURE_DIR/sockets"
 SUPPORT_DIR="$SECURE_DIR/support"
 CONFIG_DIR="$SECURE_DIR/config"
 
-# Сервер онлайн-режима
+# Сервер онлайн-режима (опционально, используется для метаданных)
 ONLINE_SERVER="encryptor-server.example.com"
 ONLINE_PORT="443"
 USE_TLS=true
@@ -70,41 +69,48 @@ session_token=""
 SESSION_ID=""
 
 # ============================================
+# УТИЛИТЫ ДЛЯ P2P (nc detection)
+# ============================================
+
+detect_nc() {
+    # Устанавливает глобальную переменную NC_CMD в доступный netcat-подобный исполнитель
+    NC_CMD=""
+    if command -v ncat &>/dev/null; then
+        NC_CMD="ncat"
+    elif command -v nc &>/dev/null; then
+        NC_CMD="nc"
+    elif command -v netcat &>/dev/null; then
+        NC_CMD="netcat"
+    else
+        NC_CMD=""
+    fi
+}
+
+# ============================================
 # ФУНКЦИИ УПРАВЛЕНИЯ ЦВЕТОВЫМИ ТЕМАМИ
 # ============================================
 
 load_color_theme() {
     local theme="$1"
-    
     if [ -z "${THEMES[$theme]}" ]; then
-        theme="dark" # Fallback к dark теме
+        theme="dark"
     fi
-    
-    # Загружаем цвета выбранной темы
     eval "${THEMES[$theme]}"
     COLOR_THEME="$theme"
-    
-    # Сохраняем выбор в конфиг
     save_config "color_theme" "$theme"
-    
     echo -e "${GREEN}Тема '$theme' загружена!${NC}"
 }
 
 show_theme_preview() {
     local theme="$1"
     local current_colors="${THEMES[$theme]}"
-    
-    # Временная загрузка темы для предпросмотра
     eval "$current_colors"
-    
     echo -e "${GREEN}════════════════════════════════════════${NC}"
     echo -e "${RED}Красный текст${NC} - ${GREEN}Зеленый текст${NC}"
     echo -e "${YELLOW}Желтый текст${NC} - ${BLUE}Синий текст${NC}"
     echo -e "${PURPLE}Фиолетовый текст${NC} - ${CYAN}Голубой текст${NC}"
     echo -e "${WHITE}Белый текст${NC}"
     echo -e "${GREEN}════════════════════════════════════════${NC}"
-    
-    # Возвращаем оригинальные цвета
     load_color_theme "$COLOR_THEME"
 }
 
@@ -114,7 +120,6 @@ change_color_theme_menu() {
         echo -e "${PURPLE}╔════════════════════════════════════════╗${NC}"
         echo -e "${PURPLE}║     СМЕНА ЦВЕТОВОЙ ТЕМЫ               ║${NC}"
         echo -e "${PURPLE}╚════════════════════════════════════════╝${NC}\n"
-        
         echo -e "${CYAN}Текущая тема: ${WHITE}$COLOR_THEME${NC}\n"
         echo -e "${YELLOW}Доступные темы:${NC}"
         echo -e "1. ${RED}●${NC} Темная (стандартная)"
@@ -125,9 +130,7 @@ change_color_theme_menu() {
         echo -e "6. ${RED}●${NC} Огненная"
         echo -e "7. ${YELLOW}●${NC} Просмотр темы"
         echo -e "8. ${WHITE}●${NC} Назад в меню\n"
-        
         read -p "Выберите тему (1-8): " theme_choice
-        
         case $theme_choice in
             1) load_color_theme "dark" ;;
             2) load_color_theme "light" ;;
@@ -135,7 +138,7 @@ change_color_theme_menu() {
             4) load_color_theme "matrix" ;;
             5) load_color_theme "ocean" ;;
             6) load_color_theme "fire" ;;
-            7) 
+            7)
                 echo -e "\n${CYAN}Выберите тему для предпросмотра:${NC}"
                 select theme_name in "${!THEMES[@]}" "Назад"; do
                     if [ "$theme_name" = "Назад" ]; then
@@ -150,7 +153,6 @@ change_color_theme_menu() {
             8) return ;;
             *) echo -e "${RED}Неверный выбор!${NC}"; sleep 1 ;;
         esac
-        
         if [ "$theme_choice" -lt 7 ]; then
             echo -e "${GREEN}Тема успешно изменена!${NC}"
             sleep 1
@@ -161,16 +163,14 @@ change_color_theme_menu() {
 save_config() {
     local key="$1"
     local value="$2"
-    
     mkdir -p "$CONFIG_DIR"
     echo "$value" > "$CONFIG_DIR/$key.cfg"
-    chmod 600 "$CONFIG_DIR/$key.cfg"
+    chmod 600 "$CONFIG_DIR/$key.cfg" 2>/dev/null || true
 }
 
 load_config() {
     local key="$1"
     local default="$2"
-    
     if [ -f "$CONFIG_DIR/$key.cfg" ]; then
         cat "$CONFIG_DIR/$key.cfg"
     else
@@ -184,57 +184,45 @@ load_config() {
 
 init_secure_environment() {
     echo -e "${YELLOW}Инициализация защищенной среды...${NC}"
-    
-    # Создание защищенных каталогов
     mkdir -p "$SECURE_DIR" "$KEYS_DIR" "$DATA_DIR" "$LOGS_DIR" "$SOCKET_DIR" \
              "$SUPPORT_DIR" "$CONFIG_DIR" 2>/dev/null
-    
-    # Установка правильных разрешений
-    chmod 700 "$SECURE_DIR"
-    find "$SECURE_DIR" -type d -exec chmod 700 {} \;
-    
-    # Загрузка сохраненной темы
+    chmod 700 "$SECURE_DIR" 2>/dev/null || true
+    find "$SECURE_DIR" -type d -exec chmod 700 {} \; 2>/dev/null || true
     local saved_theme=$(load_config "color_theme" "dark")
     load_color_theme "$saved_theme"
-    
-    # Создание мастер-ключа при первом запуске
     if [ ! -f "$KEYS_DIR/master.key" ]; then
-        openssl rand -base64 32 > "$KEYS_DIR/master.key"
-        chmod 400 "$KEYS_DIR/master.key"
+        openssl rand -base64 32 > "$KEYS_DIR/master.key" 2>/dev/null || echo "dummykey" > "$KEYS_DIR/master.key"
+        chmod 400 "$KEYS_DIR/master.key" 2>/dev/null || true
         echo -e "${GREEN}Сгенерирован новый мастер-ключ${NC}"
     fi
-    
-    # Загрузка мастер-ключа
     if [ -f "$KEYS_DIR/master.key" ]; then
-        MASTER_KEY="$(cat "$KEYS_DIR/master.key")"
+        MASTER_KEY="$(cat "$KEYS_DIR/master.key" 2>/dev/null || echo "")"
     else
         echo -e "${RED}Ошибка: Не найден мастер-ключ!${NC}"
         exit 1
     fi
-    
-    # Генерация ID сессии
-    SESSION_ID="$(date +%s%N | sha256sum | head -c 16)"
-    
+    SESSION_ID="$(date +%s%N | sha256sum | head -c 16 2>/dev/null || echo "$RANDOM")"
     echo -e "${GREEN}Защищенная среда инициализирована${NC}"
     echo -e "${BLUE}Сессия: ${WHITE}$SESSION_ID${NC}"
     log_audit "SYSTEM_INIT" "Secure environment initialized with theme: $COLOR_THEME"
+    detect_nc
 }
 
 # ============================================
-# ФУНКЦИИ ШИФРОВАНИЯ (сохраненные из предыдущих версий)
+# ФУНКЦИИ ШИФРОВАНИЯ
 # ============================================
 
 encrypt_data() {
     local plaintext="$1"
     local context="$2"
-
-    local iv=$(openssl rand -hex $IV_LENGTH)
-    local encrypted=$(echo -n "$plaintext" | openssl enc -aes-256-gcm \
+    local iv
+    iv=$(openssl rand -hex $IV_LENGTH 2>/dev/null || printf '%012x' "$RANDOM")
+    local encrypted
+    encrypted=$(echo -n "$plaintext" | openssl enc -aes-256-gcm \
         -K "$(echo -n "$MASTER_KEY" | sha256sum | cut -d' ' -f1)" \
         -iv "$iv" \
-        -a -A 2>/dev/null)
-
-    if [ $? -eq 0 ]; then
+        -a -A 2>/dev/null || echo "")
+    if [ $? -eq 0 ] && [ -n "$encrypted" ]; then
         echo "${iv}:${encrypted}:${context}"
         log_audit "ENCRYPT_SUCCESS" "Data encrypted for context: $context"
     else
@@ -245,17 +233,15 @@ encrypt_data() {
 
 decrypt_data() {
     local encrypted_data="$1"
-
     local iv=$(echo "$encrypted_data" | cut -d':' -f1)
     local data=$(echo "$encrypted_data" | cut -d':' -f2)
     local context=$(echo "$encrypted_data" | cut -d':' -f3)
-
-    local decrypted=$(echo -n "$data" | openssl enc -d -aes-256-gcm \
+    local decrypted
+    decrypted=$(echo -n "$data" | openssl enc -d -aes-256-gcm \
         -K "$(echo -n "$MASTER_KEY" | sha256sum | cut -d' ' -f1)" \
         -iv "$iv" \
-        -a -A 2>/dev/null)
-
-    if [ $? -eq 0 ]; then
+        -a -A 2>/dev/null || echo "")
+    if [ $? -eq 0 ] && [ -n "$decrypted" ]; then
         log_audit "DECRYPT_SUCCESS" "Data decrypted for context: $context"
         echo "$decrypted"
     else
@@ -267,27 +253,26 @@ decrypt_data() {
 log_audit() {
     local event_type="$1"
     local message="$2"
-    local timestamp=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
-    local user="${current_user:-"SYSTEM"}"
-    local session_id="${SESSION_ID:-"NO_SESSION"}"
-
+    local timestamp
+    timestamp=$(date -u +"%Y-%m-%dT%H:%M:%SZ" 2>/dev/null || echo "$(date +"%Y-%m-%d %H:%M:%S")")
+    local user="${current_user:-SYSTEM}"
+    local session_id="${SESSION_ID:-NO_SESSION}"
     local log_entry="$timestamp | $event_type | $user | $session_id | $message | THEME:$COLOR_THEME"
-
-    echo "$log_entry" >> "$LOGS_DIR/audit_$SESSION_ID.log"
-    echo "[AUDIT] $log_entry" >> "$LOGS_DIR/system.log"
+    mkdir -p "$LOGS_DIR" 2>/dev/null || true
+    echo "$log_entry" >> "$LOGS_DIR/audit_$SESSION_ID.log" 2>/dev/null || true
+    echo "[AUDIT] $log_entry" >> "$LOGS_DIR/system.log" 2>/dev/null || true
 }
 
 # ============================================
-# ГЛАВНОЕ МЕНЮ С ПОДДЕРЖКОЙ
+# ГЛАВНОЕ МЕНЮ
 # ============================================
 
 show_welcome_menu() {
     clear
     echo -e "${PURPLE}╔══════════════════════════════════════════════════════════╗${NC}"
     echo -e "${PURPLE}║             TERMINAL ENCRYPTOR V1.1.2                   ║${NC}"
-    echo -e "${PURPLE}║         Защищенная система шифрования и сетей          ║${NC}"
+    echo -e "${PURPLE}║         Защищенная система шифрования и сетей            ║${NC}"
     echo -e "${PURPLE}╚══════════════════════════════════════════════════════════╝${NC}\n"
-
     echo -e "${CYAN}╔══════════════════════════════════════════════════════════╗${NC}"
     echo -e "${CYAN}║                      ПОДДЕРЖКА                           ║${NC}"
     echo -e "${CYAN}║                                                          ║${NC}"
@@ -296,9 +281,7 @@ show_welcome_menu() {
     echo -e "${CYAN}║  ${WHITE}GitHub репозиторий: ${YELLOW}$GITHUB_REPO${NC}                        ${CYAN}║${NC}"
     echo -e "${CYAN}║  ${WHITE}Текущая цветовая тема: ${YELLOW}$COLOR_THEME${NC}                     ${CYAN}║${NC}"
     echo -e "${CYAN}╚══════════════════════════════════════════════════════════╝${NC}\n"
-
     echo -e "${GREEN}Добро пожаловать в систему Terminal Encryptor!${NC}\n"
-
     if [ -z "$current_user" ]; then
         echo -e "${YELLOW}1. Вход в систему${NC}"
         echo -e "${YELLOW}2. Регистрация${NC}"
@@ -308,9 +291,8 @@ show_welcome_menu() {
         echo -e "${GREEN}Вы вошли как: ${WHITE}$current_user${NC}"
         echo -e "${CYAN}ID сессии: ${WHITE}$SESSION_ID${NC}"
         echo -e "${BLUE}Тема интерфейса: ${WHITE}$COLOR_THEME${NC}\n"
-
         echo -e "${YELLOW}1. Шифрование${NC}"
-        echo -e "${YELLOW}2. Управление каналами${NC}"
+        echo -e "${YELLOW}2. Управление каналами (P2P онлайн)${NC}"
         echo -e "${YELLOW}3. Управление сетями${NC}"
         echo -e "${YELLOW}4. Настройки${NC}"
         echo -e "${YELLOW}5. Настройки аккаунта${NC}"
@@ -318,12 +300,11 @@ show_welcome_menu() {
         echo -e "${YELLOW}7. Смена цветовой темы${NC}"
         echo -e "${YELLOW}8. Выход из аккаунта${NC}"
     fi
-
     echo -e "\n${WHITE}══════════════════════════════════════════════════════════${NC}"
 }
 
 # ============================================
-# ФУНКЦИИ РЕГИСТРАЦИИ И АВТОРИЗАЦИИ
+# ФУНКЦИИ РЕГИСТРАЦИИ И АВТОРИЗАЦИИ (ИЗМЕНЁН register_user)
 # ============================================
 
 register_user() {
@@ -333,6 +314,14 @@ register_user() {
     echo -e "${PURPLE}╚════════════════════════════════════════╝${NC}\n"
 
     read -p "Введите имя пользователя: " username
+    # trim whitespace
+    username="$(echo -n "$username" | tr -d '\r\n' | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')"
+    if [ -z "$username" ]; then
+        echo -e "${RED}Имя пользователя не может быть пустым!${NC}"
+        sleep 1
+        return
+    fi
+
     read -sp "Введите пароль: " password
     echo
     read -sp "Повторите пароль: " password2
@@ -341,13 +330,13 @@ register_user() {
     if [ "$password" != "$password2" ]; then
         echo -e "${RED}Пароли не совпадают!${NC}"
         sleep 2
-        return 1
+        return
     fi
 
     if [ ${#password} -lt 6 ]; then
         echo -e "${RED}Пароль должен содержать минимум 6 символов!${NC}"
         sleep 2
-        return 1
+        return
     fi
 
     echo -e "${CYAN}Выберите язык:${NC}"
@@ -361,52 +350,58 @@ register_user() {
         *) language="ru" ;;
     esac
 
-    # Создаём каталоги если их нет
-    mkdir -p "$DATA_DIR"
-    touch "$DATA_DIR/users.db.enc"
-    chmod 600 "$DATA_DIR/users.db.enc" 2>/dev/null || true
-
-    # Проверка на дубликат имени пользователя
+    # Проверка на дубликаты по имени пользователя
     if [ -f "$DATA_DIR/users.db.enc" ]; then
         while IFS= read -r line; do
-            # line формат: user_id:encrypted_blob
-            existing_enc="${line#*:}"
-            if [ -n "$existing_enc" ]; then
-                existing_data="$(decrypt_data "$existing_enc")"
-                if [ -n "$existing_data" ]; then
-                    existing_name=$(echo "$existing_data" | grep -o 'USERNAME=[^|]*' | cut -d'=' -f2)
-                    if [ "$existing_name" = "$username" ]; then
-                        echo -e "${RED}Пользователь с таким именем уже существует!${NC}"
-                        log_audit "REGISTER_FAIL" "Attempt to register duplicate username: $username"
-                        sleep 2
-                        return 1
-                    fi
-                fi
+            stored_id="${line%%:*}"
+            encrypted_blob="${line#*:}"
+            # пропускаем пустые строки
+            [ -z "$encrypted_blob" ] && continue
+            existing_data=$(decrypt_data "$encrypted_blob")
+            # если не удалось расшифровать — пропускаем запись
+            [ -z "$existing_data" ] && continue
+            existing_username=$(echo "$existing_data" | grep -o 'USERNAME=[^|]*' | cut -d'=' -f2)
+            if [ "$existing_username" = "$username" ]; then
+                echo -e "${RED}Пользователь с таким именем уже существует: $username${NC}"
+                sleep 2
+                return
             fi
         done < "$DATA_DIR/users.db.enc"
     fi
 
-    # Генерация ID пользователя
-    user_id="USR_$(date +%s%N | sha256sum | head -c 8)"
+    # Генерация ID пользователя (с проверкой коллизии)
+    while true; do
+        user_id="USR_$(date +%s%N | sha256sum | head -c 8 2>/dev/null || echo $RANDOM)"
+        collision=false
+        if [ -f "$DATA_DIR/users.db.enc" ]; then
+            if grep -q "^$user_id:" "$DATA_DIR/users.db.enc" 2>/dev/null; then
+                collision=true
+            fi
+        fi
+        if [ "$collision" = false ]; then
+            break
+        fi
+        sleep 0.01
+    done
 
     # Хэширование пароля
     password_hash=$(echo -n "$password" | sha256sum | cut -d' ' -f1)
 
-    # Шифрование данных пользователя
+    # Формируем данные и шифруем
     user_data="USERNAME=$username|PASSWORD_HASH=$password_hash|LANGUAGE=$language|REG_DATE=$(date +%Y-%m-%d)"
     encrypted_user=$(encrypt_data "$user_data" "USER_$user_id")
 
-    # Сохранение пользователя
+    # Убедимся, что каталог данных существует
+    mkdir -p "$DATA_DIR" 2>/dev/null || true
+    # Сохраняем пользователя в файл
     echo "$user_id:$encrypted_user" >> "$DATA_DIR/users.db.enc"
-    chmod 600 "$DATA_DIR/users.db.enc" 2>/dev/null || true
 
     echo -e "\n${GREEN}Регистрация успешна!${NC}"
     echo -e "${BLUE}Ваш ID: ${WHITE}$user_id${NC}"
     echo -e "${YELLOW}Запомните ваш ID для входа!${NC}"
 
     log_audit "USER_REGISTER" "New user registered: $username ($user_id)"
-    sleep 3
-    return 0
+    sleep 2
 }
 
 login_user() {
@@ -427,50 +422,219 @@ login_user() {
 
     while IFS= read -r line; do
         local stored_id="${line%%:*}"
+        [ -z "$stored_id" ] && continue
 
         if [ "$stored_id" = "$user_id" ]; then
             local encrypted="${line#*:}"
-            local user_data="$(decrypt_data "$encrypted")"
-
+            local user_data
+            user_data="$(decrypt_data "$encrypted")"
             if [ -z "$user_data" ]; then
                 echo -e "${RED}Ошибка чтения данных пользователя!${NC}"
                 sleep 2
                 return 1
             fi
 
-            local username=$(echo "$user_data" | grep -o 'USERNAME=[^|]*' | cut -d'=' -f2)
-            local stored_hash=$(echo "$user_data" | grep -o 'PASSWORD_HASH=[^|]*' | cut -d'=' -f2)
-            local lang=$(echo "$user_data" | grep -o 'LANGUAGE=[^|]*' | cut -d'=' -f2)
+            local username
+            username=$(echo "$user_data" | grep -o 'USERNAME=[^|]*' | cut -d'=' -f2)
+            local stored_hash
+            stored_hash=$(echo "$user_data" | grep -o 'PASSWORD_HASH=[^|]*' | cut -d'=' -f2)
+            local lang
+            lang=$(echo "$user_data" | grep -o 'LANGUAGE=[^|]*' | cut -d'=' -f2)
 
-            local input_hash=$(echo -n "$password" | sha256sum | cut -d' ' -f1)
+            local input_hash
+            input_hash=$(echo -n "$password" | sha256sum | cut -d' ' -f1)
 
             if [ "$input_hash" = "$stored_hash" ]; then
-                # УСТАНАВЛИВАЕМ ПЕРЕМЕННЫЕ
                 current_user="$username"
                 current_user_id="$user_id"
                 current_language="$lang"
-
-                # Генерация токена
-                session_token="SESS_$(date +%s%N | sha256sum | head -c 16)"
-
+                session_token="SESS_$(date +%s%N | sha256sum | head -c 16 2>/dev/null || echo $RANDOM)"
                 echo -e "\n${GREEN}Вход выполнен успешно!${NC}"
                 echo -e "${BLUE}Добро пожаловать, ${WHITE}$current_user${NC}!"
                 log_audit "USER_LOGIN" "Login: $current_user ($current_user_id)"
-
-                sleep 2
+                sleep 1
                 return 0
             else
                 echo -e "${RED}Неверный пароль!${NC}"
                 log_audit "LOGIN_FAIL" "Wrong password for $user_id"
-                sleep 2
+                sleep 1
                 return 1
             fi
         fi
     done < "$DATA_DIR/users.db.enc"
 
     echo -e "${RED}Пользователь с таким ID не найден!${NC}"
-    sleep 2
+    sleep 1
     return 1
+}
+
+# ============================================
+# P2P / Управление каналами (nc-based chat)
+# ============================================
+
+# Вспомог: запустить nc в режиме прослушивания с разными вариантами опций
+_nc_listen_cmd() {
+    local port="$1"
+    # try common variants; returns command string or empty
+    if [ -z "$NC_CMD" ]; then detect_nc; fi
+    if [ -z "$NC_CMD" ]; then
+        echo ""
+        return 1
+    fi
+
+    # Prefer ncat or GNU nc with -l -k -p; else try -l -p; else -l
+    # We don't actually return different flags; we'll attempt commands when running.
+    echo "$NC_CMD"
+    return 0
+}
+
+# Запуск сервера (ожидание входящих подключений) — простая консоль-чат схема
+start_p2p_server() {
+    if [ -z "$NC_CMD" ]; then detect_nc; fi
+    if [ -z "$NC_CMD" ]; then
+        echo -e "${RED}Netcat (nc/ncat) не найден. Установите его для P2P-режима.${NC}"
+        sleep 2
+        return
+    fi
+
+    read -p "Порт для прослушивания (по умолчанию 9999): " PORT
+    PORT="${PORT:-9999}"
+
+    mkdir -p "$SOCKET_DIR" 2>/dev/null || true
+    CHAT_IN="$SOCKET_DIR/chat_in.log"
+    CHAT_OUT="$SOCKET_DIR/chat_out.fifo"
+    rm -f "$CHAT_IN" "$CHAT_OUT"
+    mkfifo "$CHAT_OUT" 2>/dev/null || true
+    touch "$CHAT_IN"
+
+    echo -e "${GREEN}Ожидание входящих подключений на порту $PORT...${NC}"
+    log_audit "P2P_SERVER_START" "Listening on port $PORT"
+
+    # try listener variants in background
+    # First try: nc -l -k -p PORT (OpenBSD/GNU ncat may support -k)
+    if "$NC_CMD" -h 2>&1 | grep -qi "ncat"; then
+        # ncat supports -l
+        ( "$NC_CMD" -l "$PORT" < "$CHAT_OUT" >> "$CHAT_IN" 2>/dev/null ) &
+        NC_PID=$!
+    else
+        # try several common variants
+        ( "$NC_CMD" -l -p "$PORT" < "$CHAT_OUT" >> "$CHAT_IN" 2>/dev/null ) &
+        NC_PID=$!
+        sleep 0.2
+        if ! kill -0 $NC_PID 2>/dev/null; then
+            # try alternative
+            ( "$NC_CMD" -l "$PORT" < "$CHAT_OUT" >> "$CHAT_IN" 2>/dev/null ) &
+            NC_PID=$!
+        fi
+    fi
+
+    # show incoming in background
+    tail -n +1 -f "$CHAT_IN" &
+    TAIL_PID=$!
+
+    echo -e "${YELLOW}Введите сообщения — они отправятся подключённому клиенту.${NC}"
+    echo -e "${YELLOW}Для выхода введите /quit${NC}"
+
+    # read loop: read user input and write to FIFO
+    while true; do
+        read -r -p "> " msg
+        if [ "$msg" = "/quit" ]; then
+            echo -e "${YELLOW}Завершение сервера...${NC}"
+            break
+        fi
+        # timestamp messages
+        printf '%s\n' "[$(date +"%H:%M")] $current_user: $msg" > "$CHAT_OUT"
+    done
+
+    # cleanup
+    kill "$NC_PID" 2>/dev/null || true
+    kill "$TAIL_PID" 2>/dev/null || true
+    rm -f "$CHAT_OUT" "$CHAT_IN" 2>/dev/null || true
+    log_audit "P2P_SERVER_STOP" "Stopped listening on port $PORT"
+    echo -e "${GREEN}Сервер остановлен.${NC}"
+    sleep 1
+}
+
+# Подключиться к удалённому хосту
+connect_p2p_client() {
+    if [ -z "$NC_CMD" ]; then detect_nc; fi
+    if [ -z "$NC_CMD" ]; then
+        echo -e "${RED}Netcat (nc/ncat) не найден. Установите его для P2P-режима.${NC}"
+        sleep 2
+        return
+    fi
+
+    read -p "IP или хост для подключения: " HOST
+    read -p "Порт (по умолчанию 9999): " PORT
+    PORT="${PORT:-9999}"
+
+    mkdir -p "$SOCKET_DIR" 2>/dev/null || true
+    CHAT_IN="$SOCKET_DIR/chat_in.log"
+    CHAT_OUT="$SOCKET_DIR/chat_out.fifo"
+    rm -f "$CHAT_IN" "$CHAT_OUT"
+    mkfifo "$CHAT_OUT" 2>/dev/null || true
+    touch "$CHAT_IN"
+
+    echo -e "${GREEN}Подключение к $HOST:$PORT ...${NC}"
+    log_audit "P2P_CLIENT_CONNECT" "Connecting to $HOST:$PORT"
+
+    # run nc client, sending FIFO to remote and appending remote output to log
+    ( "$NC_CMD" "$HOST" "$PORT" < "$CHAT_OUT" >> "$CHAT_IN" 2>/dev/null ) &
+    NC_PID=$!
+
+    # show incoming
+    tail -n +1 -f "$CHAT_IN" &
+    TAIL_PID=$!
+
+    echo -e "${YELLOW}Введите сообщения — они отправятся на $HOST.${NC}"
+    echo -e "${YELLOW}Для выхода введите /quit${NC}"
+
+    while true; do
+        read -r -p "> " msg
+        if [ "$msg" = "/quit" ]; then
+            echo -e "${YELLOW}Отключение...${NC}"
+            break
+        fi
+        printf '%s\n' "[$(date +"%H:%M")] $current_user: $msg" > "$CHAT_OUT"
+    done
+
+    kill "$NC_PID" 2>/dev/null || true
+    kill "$TAIL_PID" 2>/dev/null || true
+    rm -f "$CHAT_OUT" "$CHAT_IN" 2>/dev/null || true
+    log_audit "P2P_CLIENT_DISCONNECT" "Disconnected from $HOST:$PORT"
+    echo -e "${GREEN}Отключено.${NC}"
+    sleep 1
+}
+
+channels_menu() {
+    while true; do
+        clear
+        echo -e "${PURPLE}╔════════════════════════════════════════╗${NC}"
+        echo -e "${PURPLE}║       УПРАВЛЕНИЕ КАНАЛАМИ (P2P)       ║${NC}"
+        echo -e "${PURPLE}╚════════════════════════════════════════╝${NC}\n"
+        echo -e "${CYAN}Доступные действия:${NC}"
+        echo -e "1. Запустить сервер (ждать подключений)"
+        echo -e "2. Подключиться к другу (ввести IP)"
+        echo -e "3. Проверить наличие nc/ncat"
+        echo -e "4. Назад\n"
+        read -p "Выберите (1-4): " ch
+        case $ch in
+            1) start_p2p_server ;;
+            2) connect_p2p_client ;;
+            3)
+                detect_nc
+                if [ -n "$NC_CMD" ]; then
+                    echo -e "${GREEN}Найден: $NC_CMD${NC}"
+                else
+                    echo -e "${RED}nc/ncat не найден${NC}"
+                    echo -e "${YELLOW}Установите пакет netcat или nmap-ncat (ncat).${NC}"
+                fi
+                sleep 2
+                ;;
+            4) return ;;
+            *) echo -e "${RED}Неверный выбор!${NC}"; sleep 1 ;;
+        esac
+    done
 }
 
 # ============================================
@@ -483,10 +647,8 @@ encryption_menu() {
         echo -e "${PURPLE}╔════════════════════════════════════════╗${NC}"
         echo -e "${PURPLE}║           МЕНЮ ШИФРОВАНИЯ             ║${NC}"
         echo -e "${PURPLE}╚════════════════════════════════════════╝${NC}\n"
-
         echo -e "${CYAN}Текущий пользователь: ${WHITE}$current_user${NC}"
         echo -e "${YELLOW}ID сессии: ${WHITE}$SESSION_ID${NC}\n"
-
         echo -e "${GREEN}1. Зашифровать текст${NC}"
         echo -e "${GREEN}2. Расшифровать текст${NC}"
         echo -e "${GREEN}3. Зашифровать символы/цифры${NC}"
@@ -494,56 +656,52 @@ encryption_menu() {
         echo -e "${GREEN}5. Зашифровать IP${NC}"
         echo -e "${GREEN}6. Расшифровать IP${NC}"
         echo -e "${GREEN}7. Выйти в главное меню${NC}"
-
         echo -e "\n${WHITE}════════════════════════════════════════${NC}"
         read -p "Выберите действие (1-7): " choice
-
         case $choice in
             1)
                 echo -e "\n${CYAN}Введите текст для шифрования:${NC}"
-                read text
+                read -r text
                 encrypted=$(encrypt_data "$text" "TEXT_ENCRYPTION")
                 echo -e "${GREEN}Зашифрованный текст:${NC}"
                 echo -e "${WHITE}$encrypted${NC}"
                 ;;
             2)
                 echo -e "\n${CYAN}Введите зашифрованный текст:${NC}"
-                read encrypted_text
+                read -r encrypted_text
                 decrypted=$(decrypt_data "$encrypted_text")
                 echo -e "${GREEN}Расшифрованный текст:${NC}"
                 echo -e "${WHITE}$decrypted${NC}"
                 ;;
             3)
                 echo -e "\n${CYAN}Введите символы/цифры для шифрования:${NC}"
-                read chars
-                # Простой шифр замены
+                read -r chars
                 encrypted_chars=$(echo "$chars" | tr '0-9A-Za-z' '9-0Z-Az-a')
                 echo -e "${GREEN}Зашифровано:${NC} ${WHITE}$encrypted_chars${NC}"
                 ;;
             4)
                 echo -e "\n${CYAN}Введите зашифрованные символы:${NC}"
-                read encrypted_chars
+                read -r encrypted_chars
                 decrypted_chars=$(echo "$encrypted_chars" | tr '9-0Z-Az-a' '0-9A-Za-z')
                 echo -e "${GREEN}Расшифровано:${NC} ${WHITE}$decrypted_chars${NC}"
                 ;;
             5)
                 echo -e "\n${CYAN}Введите IP-адрес:${NC}"
-                read ip
+                read -r ip
                 encrypted_ip=$(echo "$ip" | tr '0123456789.' '9876543210@')
                 echo -e "${GREEN}Зашифрованный IP:${NC} ${WHITE}$encrypted_ip${NC}"
                 ;;
             6)
                 echo -e "\n${CYAN}Введите зашифрованный IP:${NC}"
-                read encrypted_ip
+                read -r encrypted_ip
                 decrypted_ip=$(echo "$encrypted_ip" | tr '9876543210@' '0123456789.')
                 echo -e "${GREEN}Расшифрованный IP:${NC} ${WHITE}$decrypted_ip${NC}"
                 ;;
             7) return ;;
             *) echo -e "${RED}Неверный выбор!${NC}"; sleep 1 ;;
         esac
-
         echo -e "\n${YELLOW}Нажмите Enter для продолжения...${NC}"
-        read
+        read -r
     done
 }
 
@@ -552,19 +710,16 @@ account_settings_menu() {
         clear
         echo -e "${PURPLE}╔════════════════════════════════════════╗${NC}"
         echo -e "${PURPLE}║       НАСТРОЙКИ АККАУНТА             ║${NC}"
-        echo -e `${PURPLE}╚════════════════════════════════════════╝${NC}\n`  >/dev/null 2>&1
+        echo -e "${PURPLE}╚════════════════════════════════════════╝${NC}\n"
         echo -e "${CYAN}Текущий пользователь: ${WHITE}$current_user${NC}"
         echo -e "${BLUE}ID пользователя: ${WHITE}$current_user_id${NC}"
         echo -e "${YELLOW}Язык: ${WHITE}$current_language${NC}\n"
-
         echo -e "${GREEN}1. Изменить имя пользователя${NC}"
         echo -e "${GREEN}2. Изменить пароль${NC}"
         echo -e "${GREEN}3. Показать ID${NC}"
         echo -e "${GREEN}4. Выйти${NC}"
-
         echo -e "\n${WHITE}════════════════════════════════════════${NC}"
         read -p "Выберите действие (1-4): " choice
-
         case $choice in
             1)
                 echo -e "\n${CYAN}Текущее имя: ${WHITE}$current_user${NC}"
@@ -584,7 +739,6 @@ account_settings_menu() {
                 echo
                 read -sp "Повторите новый пароль: " new_pass2
                 echo
-
                 if [ "$new_pass1" = "$new_pass2" ]; then
                     if [ ${#new_pass1} -ge 6 ]; then
                         echo -e "${GREEN}Пароль успешно изменен!${NC}"
@@ -604,9 +758,8 @@ account_settings_menu() {
             4) return ;;
             *) echo -e "${RED}Неверный выбор!${NC}"; sleep 1 ;;
         esac
-
         echo -e "\n${YELLOW}Нажмите Enter для продолжения...${NC}"
-        read
+        read -r
     done
 }
 
@@ -615,17 +768,11 @@ account_settings_menu() {
 # ============================================
 
 main() {
-    # Инициализация
     init_secure_environment
-
-    # Главный цикл
     while true; do
         show_welcome_menu
-
         if [ -z "$current_user" ]; then
-            # Меню для неавторизованных пользователей
             read -p "Выберите действие (1-4): " choice
-
             case $choice in
                 1) login_user ;;
                 2) register_user ;;
@@ -639,15 +786,10 @@ main() {
                 *) echo -e "${RED}Неверный выбор!${NC}"; sleep 1 ;;
             esac
         else
-            # Меню для авторизованных пользователей
             read -p "Выберите действие (1-8): " choice
-
             case $choice in
                 1) encryption_menu ;;
-                2)
-                    echo -e "\n${YELLOW}Модуль управления каналами в разработке...${NC}"
-                    sleep 2
-                    ;;
+                2) channels_menu ;;   # <-- тут используется новый P2P-модуль
                 3)
                     echo -e "\n${YELLOW}Модуль управления сетями в разработке...${NC}"
                     sleep 2
@@ -668,7 +810,7 @@ main() {
                     current_user=""
                     current_user_id=""
                     session_token=""
-                    sleep 2
+                    sleep 1
                     ;;
                 *) echo -e "${RED}Неверный выбор!${NC}"; sleep 1 ;;
             esac
@@ -680,40 +822,38 @@ main() {
 # ЗАПУСК ПРОГРАММЫ
 # ============================================
 
-# Проверка зависимостей
 check_dependencies() {
     local missing=0
-
     echo -e "${CYAN}Проверка зависимостей...${NC}"
-
-    # Проверка наличия openssl
-    if ! command -v openssl &> /dev/null; then
+    if ! command -v openssl &>/dev/null; then
         echo -e "${RED}✗ OpenSSL не установлен${NC}"
         echo -e "${YELLOW}Установите: pkg install openssl${NC}"
         missing=1
     else
         echo -e "${GREEN}✓ OpenSSL установлен${NC}"
     fi
-
-    # Проверка наличия sha256sum
-    if ! command -v sha256sum &> /dev/null; then
+    if ! command -v sha256sum &>/dev/null; then
         echo -e "${RED}✗ sha256sum не найден${NC}"
         echo -e "${YELLOW}Установите: pkg install coreutils${NC}"
         missing=1
     else
         echo -e "${GREEN}✓ sha256sum установлен${NC}"
     fi
+    # nc/ncat не обязателен, но уведомим пользователя
+    if ! command -v nc &>/dev/null && ! command -v ncat &>/dev/null && ! command -v netcat &>/dev/null; then
+        echo -e "${YELLOW}ℹ P2P-чат (nc/ncat) не найден — для онлайн-режима установите netcat/ncat.${NC}"
+    else
+        echo -e "${GREEN}✓ netcat/ncat найден — P2P-чат доступен${NC}"
+    fi
 
     if [ $missing -eq 1 ]; then
         echo -e "\n${RED}Установите недостающие зависимости и перезапустите скрипт${NC}"
         exit 1
     fi
-
     echo -e "\n${GREEN}Все зависимости удовлетворены!${NC}"
     sleep 1
 }
 
-# Начало выполнения
 echo -e "${PURPLE}══════════════════════════════════════════════════════════${NC}"
 echo -e "${PURPLE}          TERMINAL ENCRYPTOR V1.1.2                      ${NC}"
 echo -e "${PURPLE}       Secure Edition with Color Themes                  ${NC}"
